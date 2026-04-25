@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# VSCode
+*.code-workspace
+
+# pipenv
+Pipfile
+Pipfile.*
+
+# app
+llm_cfg.json
