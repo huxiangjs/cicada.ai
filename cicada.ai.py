@@ -8,14 +8,18 @@ llm_cfg_file = 'llm_cfg.json'
 llm_cfg_value = None
 llm_client = None
 
-# 配置项检查
 def item_check(json_data):
+    """
+    配置项检查
+    """
     if 'api_key' in json_data and 'base_url' in json_data and 'model' in json_data:
         return True
     return False
 
-# 配置文件检查
 def cfg_check_and_set():
+    """
+    配置文件检查
+    """
     global llm_cfg_value
     # 读取配置
     try:
@@ -31,8 +35,10 @@ def cfg_check_and_set():
         # print(e)
         return False
 
-# 配置
 async def cfg_main(message):
+    """
+    模型配置
+    """
     global llm_cfg_value
     cfg_dict = { }
     author = 'config'
@@ -71,8 +77,10 @@ async def cfg_main(message):
             author=author,
         ).send()
 
-# 聊天
 async def chat_main(message):
+    """
+    对话聊天
+    """
     global llm_client
     if llm_client is None:
         # 初始化客户端 (指向本地 vLLM 服务或 OpenAI)
@@ -82,14 +90,20 @@ async def chat_main(message):
         )
 
     # 创建一个空的 Chainlit 消息对象
-    msg = cl.Message(content='')
+    msg = cl.Message(content='', author='assistant')
     await msg.send()
+
+    # 从会话中获取历史消息
+    message_history = cl.user_session.get('message_history')
+
+    # 将用户的新消息加入历史
+    message_history.append({'role': 'user', 'content': message.content})
 
     # 调用 LLM
     stream = await llm_client.chat.completions.create(
         model = llm_cfg_value['model'], # 模型名称
-        messages=[{'role': 'user', 'content': message.content}],
-        stream=True  # 开启流式模式
+        messages = message_history,     # 传入历史消息
+        stream = True                   # 开启流式模式
     )
 
     # 循环接收数据块并实时推送到前端
@@ -102,8 +116,20 @@ async def chat_main(message):
     # 更新最终消息状态
     await msg.update()
 
+    # 将 AI 的完整回复加入历史
+    message_history.append({'role': 'assistant', 'content': msg.content})
+
+    # 更新会话中的历史列表
+    cl.user_session.set('message_history', message_history)
+    # print(json.dumps(message_history, indent=4, ensure_ascii=False))
+
 @cl.on_chat_start
 async def on_start():
+    # 预设一个 system 角色来定义 AI 的行为
+    cl.user_session.set('message_history', [
+        {'role': 'system', 'content': '你的名字叫知了·AI，你是一个乐于助人的AI助手。'}
+    ])
+
     # 主动发送欢迎消息
     await cl.Message(
         content='👋 你好！我是 知了·AI。\n\n我可以帮你写代码、回答问题。',
@@ -125,7 +151,7 @@ async def on_start():
                     'api_key: xxxxxxx\n'
                     'model: DeepSeek-V3-2\n'
                     '```',
-            author='system',
+            author='config',
         ).send()
 
     # 可以发送元素，比如图片
