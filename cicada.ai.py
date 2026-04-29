@@ -128,7 +128,7 @@ async def chat_main(message):
             print('工具调用:', delta.tool_calls, flush=True)
             tool_call_id = delta.tool_calls[0].id
             function_name = delta.tool_calls[0].function.name
-            arguments = delta.tool_calls[0].function.arguments
+            arguments = json.loads(delta.tool_calls[0].function.arguments)
             # print(tool_call_id, function_name, arguments)
             # 过滤掉异常的工具调用
             if tool_call_id is not None and function_name is not None and arguments is not None:
