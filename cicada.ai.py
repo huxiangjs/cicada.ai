@@ -4,6 +4,7 @@ import chainlit as cl
 from openai import AsyncOpenAI,BadRequestError
 import json
 import tools.functions
+import asyncio
 
 llm_cfg_file = 'llm_cfg.json'
 llm_cfg_value = None
@@ -71,7 +72,8 @@ async def cfg_main(message):
 
 @cl.step(type='tool', name='tools')
 async def call_function(func, arguments):
-    return tools.functions.call_function(func, arguments)
+    functions = cl.user_session.get('functions')
+    return functions.call_function(func, arguments)
 
 async def chat_main(message):
     """
@@ -93,16 +95,19 @@ async def chat_main(message):
         message_history.append({'role': 'user', 'content': message.content})
     # print('\n'.join([str(_) for _ in message_history]))
 
+    # 工具
+    functions = cl.user_session.get('functions')
+
     recall = False
     try:
         # 调用 LLM
         stream = await llm_client.chat.completions.create(
-            model = llm_cfg_value['model'],             # 模型名称
-            messages = message_history,                 # 传入历史消息
-            tools = tools.functions.get_function_desc(),# 将定义好的工具列表传进去
-            tool_choice = 'auto',                       # 让模型自动判断是否需要调用工具
+            model = llm_cfg_value['model'],         # 模型名称
+            messages = message_history,             # 传入历史消息
+            tools = functions.get_function_desc(),  # 将定义好的工具列表传进去
+            tool_choice = 'auto',                   # 让模型自动判断是否需要调用工具
             # max_tokens = 64000,
-            stream = True                               # 开启流式模式
+            stream = True                           # 开启流式模式
         )
 
         # 创建一个空的 chainlit 消息对象
@@ -172,7 +177,11 @@ async def chat_main(message):
             for tool_call in tool_calls:
                 tool_call_id = tool_call.id
                 function_name = tool_call.function.name
-                arguments = json.loads(tool_call.function.arguments)
+                arguments = tool_call.function.arguments
+                # print(arguments)
+                if len(arguments) > 2 and arguments.startswith('{}'):
+                    arguments = arguments[2:]
+                arguments = json.loads(arguments)
                 # print(tool_call_id, function_name, arguments)
                 # 调用工具
                 result = await call_function(function_name, arguments)
@@ -197,8 +206,47 @@ async def chat_main(message):
     # print('\n'.join([str(_) for _ in message_history]))
     return recall
 
+async def function_callback_message_loop(queue):
+    print('回调task启动')
+    while True:
+        content = await queue.get()
+        print('收到function回调消息:',content)
+        try:
+            # 从会话中获取历史消息
+            message_history = cl.user_session.get('message_history')
+            # 新消息加入历史
+            message_history.append({'role': 'system', 'content': content})
+            cl.user_session.set('message_history', message_history)
+            # print('\n'.join([str(_) for _ in message_history]))
+            # 开启推理
+            recall = True
+            while recall:
+                recall = await chat_main(None)
+        except Exception as e:
+            print(e)
+        # await asyncio.sleep(1)
+
+def function_callback(content, queue):
+    print('发送function回调消息:',content)
+    queue.put_nowait(content)
+
 @cl.on_chat_start
 async def on_start():
+    print('on_chat_start')
+    queue = asyncio.Queue()
+    # 就创建带上下文的异步task
+    # tasks = asyncio.all_tasks()
+    # for t in tasks:
+    #     if getattr(t, 'tag', None) == 'function_callback_message_loop':
+    #         t.cancel()
+    task = asyncio.create_task(function_callback_message_loop(queue))
+    # task.tag = 'function_callback_message_loop'
+    cl.user_session.set('task', task)
+    # 初始化工具
+    functions = tools.functions.functions()
+    functions.init_function(function_callback, queue)
+    cl.user_session.set('functions', functions)
+
     # 预设一个 system 角色来定义 AI 的行为
     cl.user_session.set('message_history', [
         {'role': 'system', 'content': '你的名字叫知了·AI，你是一个乐于助人的AI助手。'}
@@ -236,7 +284,24 @@ async def on_chat(message: cl.Message):
     if llm_cfg_value is None:
         await cfg_main(message)
     else:
+        # 处理消息
         recall = await chat_main(message)
         # 如果上一轮调用了工具, 那就还需要推理一次让模型输出结果
         while recall:
             recall = await chat_main(None)
+
+@cl.on_chat_end
+async def on_chat_end():
+    print('on_chat_end')
+    # 注销工具
+    functions = cl.user_session.get('functions')
+    functions.deinit_function()
+    cl.user_session.set('functions', None)
+    # 关闭task
+    task = cl.user_session.get('task')
+    task.cancel()
+    cl.user_session.set('task', None)
+
+@cl.on_app_startup
+async def on_app_startup():
+    print('on_app_startup')
