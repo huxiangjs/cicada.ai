@@ -9,6 +9,7 @@ class functions:
         self.__all_function = [
             tools.function_date.date.function_date(),
             tools.function_weather.weather.function_weather(),
+            tools.function_alarm.alarm.function_alarm(),
         ]
 
     def get_function_desc(self):
