@@ -238,5 +238,5 @@ async def on_chat(message: cl.Message):
     else:
         recall = await chat_main(message)
         # 如果上一轮调用了工具, 那就还需要推理一次让模型输出结果
-        if recall:
-            await chat_main(None)
+        while recall:
+            recall = await chat_main(None)
