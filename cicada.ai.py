@@ -1,7 +1,7 @@
 # -*- coding:utf-8 -*-
 
 import chainlit as cl
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI,BadRequestError
 import json
 import tools.functions
 
@@ -63,22 +63,13 @@ async def cfg_main(message):
             with open(llm_cfg_file, 'w', encoding='utf-8') as f:
                 f.write(json_str)
             llm_cfg_value = json.loads(json_str)
-            await cl.Message(
-                content='配置成功，现在你可以开始和我聊天啦！\n',
-                author=author,
-            ).send()
+            await cl.Message(content='配置成功，现在你可以开始和我聊天啦！\n', author=author).send()
         except Exception as e:
-            await cl.Message(
-                content=f'配置失败: {e}\n',
-                author=author,
-            ).send()
+            await cl.Message(content=f'配置失败: {e}\n', author=author).send()
     else:
-        await cl.Message(
-            content=f'配置失败: 格式或配置不完整，请重新输入\n',
-            author=author,
-        ).send()
+        await cl.Message(content=f'配置失败: 格式或配置不完整，请重新输入\n', author=author).send()
 
-@cl.step(type='tool', name='工具箱')
+@cl.step(type='tool', name='tools')
 async def call_function(func, arguments):
     return tools.functions.call_function(func, arguments)
 
@@ -94,67 +85,117 @@ async def chat_main(message):
             base_url = llm_cfg_value['base_url']
         )
 
-    # 创建一个空的 Chainlit 消息对象
-    msg = cl.Message(content='', author='assistant')
-    await msg.send()
-
     # 从会话中获取历史消息
     message_history = cl.user_session.get('message_history')
 
     # 将用户的新消息加入历史
     if message is not None:
         message_history.append({'role': 'user', 'content': message.content})
+    # print('\n'.join([str(_) for _ in message_history]))
 
-    # print(message_history)
+    recall = False
+    try:
+        # 调用 LLM
+        stream = await llm_client.chat.completions.create(
+            model = llm_cfg_value['model'],             # 模型名称
+            messages = message_history,                 # 传入历史消息
+            tools = tools.functions.get_function_desc(),# 将定义好的工具列表传进去
+            tool_choice = 'auto',                       # 让模型自动判断是否需要调用工具
+            # max_tokens = 64000,
+            stream = True                               # 开启流式模式
+        )
 
-    # 调用 LLM
-    stream = await llm_client.chat.completions.create(
-        model = llm_cfg_value['model'],             # 模型名称
-        messages = message_history,                 # 传入历史消息
-        tools = tools.functions.get_function_desc(),# 将定义好的工具列表传进去
-        tool_choice = 'auto',                       # 让模型自动判断是否需要调用工具
-        # max_tokens = 64000,
-        stream = True                               # 开启流式模式
-    )
+        # 创建一个空的 chainlit 消息对象
+        msg = cl.Message(content='', author='assistant')
+        await msg.send()
 
-    tool_call = False
-    # 循环接收数据块并实时推送到前端
-    async for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta.content:       # 提取增量内容
-            # 使用 stream_token 将文字流式输出到界面上
-            await msg.stream_token(delta.content)
-        elif delta.tool_calls:  # 提取工具内容
-            print('工具调用:', delta.tool_calls, flush=True)
-            tool_call_id = delta.tool_calls[0].id
-            function_name = delta.tool_calls[0].function.name
-            arguments = json.loads(delta.tool_calls[0].function.arguments)
-            # print(tool_call_id, function_name, arguments)
-            # 过滤掉异常的工具调用
-            if tool_call_id is not None and function_name is not None and arguments is not None:
-                # 把发起的动作插入到上下文中
-                message_history.append({"role": "assistant", "content": None, "tool_calls": delta.tool_calls})
-                cl.user_session.set('message_history', message_history)
+        new_message = []
+        reasoning = False
+        last_mode = 0   # 0:初始化 1:文本输出 2:工具调用
+        # 循环接收数据块并实时推送到前端
+        async for chunk in stream:
+            # 如果当前chunk没有choices，通常是最后一个包含usage信息的chunk
+            if not chunk.choices:
+                # 在这里可以打印token使用情况
+                print(chunk.usage)
+                continue
+
+            delta = chunk.choices[0].delta
+            if hasattr(delta, 'reasoning_content') and delta.reasoning_content: # 思考输出
+                if last_mode != 1:
+                    new_message.append({'role': 'assistant', 'content': ''})
+                    last_mode = 1
+                # print(delta.reasoning_content, end="", flush=True)
+                # 人为给思考模式加上前缀
+                if 'reasoning_content' not in new_message[-1]:
+                    new_message[-1]['reasoning_content'] = ''
+                    await msg.stream_token('```thinking\n')
+                    reasoning = True
+                # 追加
+                new_message[-1]['reasoning_content'] += delta.reasoning_content
+                await msg.stream_token(delta.reasoning_content)
+            elif hasattr(delta, 'content') and  delta.content:                  # 提取增量内容
+                # 闭合思考模式的显示
+                if reasoning:
+                    await msg.stream_token('\n```\n')
+                    reasoning = False
+                if last_mode != 1:
+                    new_message.append({'role': 'assistant', 'content': ''})
+                    last_mode = 1
+                new_message[-1]['content'] += delta.content
+                # 使用 stream_token 将文字流式输出到界面上
+                await msg.stream_token(delta.content)
+            elif hasattr(delta, 'tool_calls') and delta.tool_calls:             # 提取工具内容
+                # 刷新
+                if last_mode != 2:
+                    await msg.update()
+                    last_mode = 2
+                # print('工具调用片段:', delta.tool_calls, flush=True)
+                # 工具调用添加进去
+                if 'tool_calls' not in new_message[-1]:
+                    new_message[-1]['tool_calls'] = delta.tool_calls
+                else:   # 片段拼合
+                    tool_calls = new_message[-1]['tool_calls']
+                    for call, call_part in zip(tool_calls, delta.tool_calls):
+                        if call_part.id:
+                            call.id = (call.id + call_part.id) if call.id else call_part.id
+                        if call_part.function.name:
+                            call.function.name = (call.function.name + call_part.function.name) \
+                                if call.function.name else call_part.function.name
+                        if call_part.function.arguments:
+                            call.function.arguments = (call.function.arguments + call_part.function.arguments) \
+                                if call.function.arguments else call_part.function.arguments
+                    new_message[-1]['tool_calls'] = tool_calls
+
+        if last_mode == 2:          # 最后是工具调用
+            tool_calls = new_message[-1]['tool_calls']
+            for tool_call in tool_calls:
+                tool_call_id = tool_call.id
+                function_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+                # print(tool_call_id, function_name, arguments)
                 # 调用工具
                 result = await call_function(function_name, arguments)
                 # 把调用工具的结果加入上下文
-                message_history.append({"role": "tool", "tool_call_id": tool_call_id, "name": function_name, "content": result})
-                cl.user_session.set('message_history', message_history)
+                new_message.append({"role": "tool", "tool_call_id": tool_call_id, "name": function_name, "content": result})
                 # print(message_history)
-            tool_call = True
+            recall = True
+        elif last_mode == 1:        # 最后是聊天
+            # 更新最终消息状态
+            await msg.update()
 
-    # 更新最终消息状态
-    await msg.update()
-
-    # 如果不是工具调用
-    if not tool_call:
         # 将 AI 的完整回复加入历史
-        message_history.append({'role': 'assistant', 'content': msg.content})
+        message_history.extend(new_message)
         # 更新会话中的历史列表
         cl.user_session.set('message_history', message_history)
         # print(json.dumps(message_history, indent=4, ensure_ascii=False))
 
-    return tool_call
+    except BadRequestError as e:
+        await cl.Message(content=f'请求异常: {e}\n', author='error').send()
+        recall = False
+
+    # print('\n'.join([str(_) for _ in message_history]))
+    return recall
 
 @cl.on_chat_start
 async def on_start():
