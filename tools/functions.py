@@ -11,6 +11,7 @@ if __name__ == "__main__":
 import tools.function_date.date
 import tools.function_weather.weather
 import tools.function_alarm.alarm
+import tools.function_file.file
 
 class functions:
     def __init__(self):
@@ -18,6 +19,7 @@ class functions:
             tools.function_date.date.function_date(),
             tools.function_weather.weather.function_weather(),
             tools.function_alarm.alarm.function_alarm(),
+            tools.function_file.file.function_file(),
         ]
 
     def get_function_desc(self):
