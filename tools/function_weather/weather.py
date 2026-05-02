@@ -3,7 +3,8 @@ import requests
 class function_weather:
     def function_call(self, arguments):
         """
-        使用 wttr.in 获取指定城市的天气
+        使用 wttr.in 获取指定城市当前的天气状况和未来2天的天气状况
+        返回值: json格式数据
         """
         # ?format=3 参数可以返回一行精简的天气信息
         # url = f"https://wttr.in/{city_name}?format=3&lang=zh"
@@ -26,7 +27,7 @@ class function_weather:
                 "type": "function",  # 工具类型，目前主要是 "function"
                 "function": {
                     "name": "get_weather",  # 函数名
-                    "description": "获取指定城市当前的天气状况和未来2天的天气状况，返回为json数据",  # 功能描述
+                    "description": function_weather.function_call.__doc__.strip(),  # 功能描述
                     "parameters": {  # 参数定义，遵循 JSON Schema
                         "type": "object",
                         "properties": {

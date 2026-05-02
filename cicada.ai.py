@@ -179,9 +179,11 @@ async def chat_main(message):
                 function_name = tool_call.function.name
                 arguments = tool_call.function.arguments
                 # print(arguments)
-                if len(arguments) > 2 and arguments.startswith('{}'):
-                    arguments = arguments[2:]
-                arguments = json.loads(arguments)
+                try:
+                    arguments = json.loads(arguments)
+                except Exception as e:
+                    print('异常的json数据:', arguments)
+                    raise e
                 # print(tool_call_id, function_name, arguments)
                 # 调用工具
                 result = await call_function(function_name, arguments)

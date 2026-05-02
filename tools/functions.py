@@ -1,5 +1,13 @@
 # -*- coding:utf-8 -*-
 
+if __name__ == "__main__":
+    import sys as s
+    import os as o
+    project_root = o.path.dirname(o.path.dirname(o.path.abspath(__file__)))
+    print(project_root)
+    if project_root not in s.path:
+        s.path.insert(0, project_root)
+
 import tools.function_date.date
 import tools.function_weather.weather
 import tools.function_alarm.alarm
@@ -39,4 +47,7 @@ class functions:
             desc['deinit']()
 
 if __name__ == "__main__":
-    print(functions().get_function_desc())
+    import json as j
+    result_list = functions().get_function_desc()
+    result_json_str = j.dumps(result_list, indent=4, ensure_ascii=False)
+    print(result_json_str)
