@@ -13,8 +13,8 @@ class function_alarm:
 
     def __alarm_callback(self, name):
         if self.__callback:
-             self.__callback(f"这是一个system消息注入: 现在名为'{name}'、id为'{self.__alarm_list[name][2]}'的闹钟到期了, "
-                              "你应该仔细检查闹钟名字和id, 确保和设置的闹钟匹配, 之后根据需要你可以提示user或者调用tool",
+             self.__callback(f"名为'{name}'、id为'{self.__alarm_list[name][2]}'的闹钟到期了, "
+                              "请仔细检查闹钟名字和id, 确保和设置的闹钟匹配, 之后根据需要提示user或者调用tool",
                               self.__args)
         if  self.__alarm_list[name][1] == '一次':
             self.__alarm_del(name)

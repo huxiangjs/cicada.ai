@@ -115,6 +115,7 @@ async def chat_main(message):
         await msg.send()
 
         new_message = []
+        tool_calls = {}
         reasoning = False
         last_mode = 0   # 0:初始化 1:文本输出 2:工具调用
         # 循环接收数据块并实时推送到前端
@@ -153,40 +154,48 @@ async def chat_main(message):
             elif hasattr(delta, 'tool_calls') and delta.tool_calls:             # 提取工具内容
                 # 刷新
                 if last_mode != 2:
-                    await msg.update()
+                    # 如果是空则直接删除
+                    if len(msg.content.strip()):
+                        await msg.update()
+                    else:
+                        await msg.remove()
                     last_mode = 2
                 # print('工具调用片段:', delta.tool_calls, flush=True)
-                # 工具调用添加进去
-                if 'tool_calls' not in new_message[-1]:
-                    new_message[-1]['tool_calls'] = delta.tool_calls
-                else:   # 片段拼合
-                    tool_calls = new_message[-1]['tool_calls']
-                    for call, call_part in zip(tool_calls, delta.tool_calls):
-                        if call_part.id:
-                            call.id = (call.id + call_part.id) if call.id else call_part.id
-                        if call_part.function.name:
-                            call.function.name = (call.function.name + call_part.function.name) \
-                                if call.function.name else call_part.function.name
-                        if call_part.function.arguments:
-                            call.function.arguments = (call.function.arguments + call_part.function.arguments) \
-                                if call.function.arguments else call_part.function.arguments
-                    new_message[-1]['tool_calls'] = tool_calls
+                # 片段拼合
+                for part in delta.tool_calls:
+                    if part.index not in tool_calls:
+                        tool_calls[part.index] = part
+                        continue
+                    call = tool_calls[part.index]
+                    if part.id:
+                        call.id = (call.id + part.id) if call.id else part.id
+                    if part.function.name:
+                        call.function.name = (call.function.name + part.function.name) \
+                            if call.function.name else part.function.name
+                    if part.function.arguments:
+                        call.function.arguments = (call.function.arguments + part.function.arguments) \
+                            if call.function.arguments else part.function.arguments
+                new_message[-1]['tool_calls'] = tool_calls
 
         if last_mode == 2:          # 最后是工具调用
+            # dict转list
+            tool_calls = list(tool_calls.values())
+            # 工具调用添加进去
+            new_message[-1]['tool_calls'] = tool_calls
+            # 逐个调用
             tool_calls = new_message[-1]['tool_calls']
             for tool_call in tool_calls:
                 tool_call_id = tool_call.id
                 function_name = tool_call.function.name
                 arguments = tool_call.function.arguments
-                # print(arguments)
+                # print(tool_call_id, function_name, arguments)
                 try:
                     arguments = json.loads(arguments)
+                    # 调用工具
+                    result = await call_function(function_name, arguments)
                 except Exception as e:
                     print('异常的json数据:', arguments)
-                    raise e
-                # print(tool_call_id, function_name, arguments)
-                # 调用工具
-                result = await call_function(function_name, arguments)
+                    result = 'tool出错了，请按相同参数重试'
                 # 把调用工具的结果加入上下文
                 new_message.append({"role": "tool", "tool_call_id": tool_call_id, "name": function_name, "content": result})
                 # print(message_history)
@@ -214,16 +223,18 @@ async def function_callback_message_loop(queue):
         content = await queue.get()
         print('收到function回调消息:',content)
         try:
-            # 从会话中获取历史消息
-            message_history = cl.user_session.get('message_history')
-            # 新消息加入历史
-            message_history.append({'role': 'system', 'content': content})
-            cl.user_session.set('message_history', message_history)
-            # print('\n'.join([str(_) for _ in message_history]))
-            # 开启推理
-            recall = True
-            while recall:
-                recall = await chat_main(None)
+            lock = cl.user_session.get('lock')
+            async with lock:  # 获取锁
+                # 从会话中获取历史消息
+                message_history = cl.user_session.get('message_history')
+                # 新消息加入历史
+                message_history.append({'role': 'user', 'content': f'系统通知: {content}'})
+                cl.user_session.set('message_history', message_history)
+                # print('\n'.join([str(_) for _ in message_history]))
+                # 开启推理
+                recall = True
+                while recall:
+                    recall = await chat_main(None)
         except Exception as e:
             print(e)
         # await asyncio.sleep(1)
@@ -248,6 +259,9 @@ async def on_start():
     functions = tools.functions.functions()
     functions.init_function(function_callback, queue)
     cl.user_session.set('functions', functions)
+    # 初始化锁
+    lock = asyncio.Lock()
+    cl.user_session.set('lock', lock)
 
     # 预设一个 system 角色来定义 AI 的行为
     cl.user_session.set('message_history', [
@@ -286,11 +300,13 @@ async def on_chat(message: cl.Message):
     if llm_cfg_value is None:
         await cfg_main(message)
     else:
-        # 处理消息
-        recall = await chat_main(message)
-        # 如果上一轮调用了工具, 那就还需要推理一次让模型输出结果
-        while recall:
-            recall = await chat_main(None)
+        lock = cl.user_session.get('lock')
+        async with lock:  # 获取锁
+            # 处理消息
+            recall = await chat_main(message)
+            # 如果上一轮调用了工具, 那就还需要推理一次让模型输出结果
+            while recall:
+                recall = await chat_main(None)
 
 @cl.on_chat_end
 async def on_chat_end():

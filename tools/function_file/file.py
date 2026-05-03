@@ -18,6 +18,8 @@ class RestrictedPath:
 
     def __check_path(self, user_path):
         """检查路径是否在根目录下"""
+        if user_path == '/':
+            user_path = '.'
         full_path = (self.root_path / user_path).resolve()
         # 确保路径在根目录内
         if not str(full_path).startswith(str(self.root_path)):
