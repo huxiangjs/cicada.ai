@@ -12,6 +12,7 @@ import tools.function_date.date
 import tools.function_weather.weather
 import tools.function_alarm.alarm
 import tools.function_file.file
+import tools.function_memory.memory
 
 class functions:
     def __init__(self):
@@ -20,6 +21,7 @@ class functions:
             tools.function_weather.weather.function_weather(),
             tools.function_alarm.alarm.function_alarm(),
             tools.function_file.file.function_file(),
+            tools.function_memory.memory.function_memory(),
         ]
 
     def get_function_desc(self):

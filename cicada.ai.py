@@ -1,5 +1,8 @@
 # -*- coding:utf-8 -*-
 
+import os
+import shutil
+import fcntl
 import chainlit as cl
 from openai import AsyncOpenAI,BadRequestError
 import json
@@ -9,6 +12,11 @@ import asyncio
 llm_cfg_file = 'llm_cfg.json'
 llm_cfg_value = None
 llm_client = None
+memory_file = 'memory.json'
+
+# 检查文件如果不存在则使用默认值
+if not os.path.exists(memory_file):
+    shutil.copy('memory_default.json', memory_file)
 
 def item_check(json_data):
     """
@@ -37,17 +45,17 @@ def cfg_check_and_set():
         # print(e)
         return False
 
-async def cfg_main(message):
+async def cfg_main(content):
     """
     模型配置
     """
     global llm_cfg_value
     cfg_dict = { }
     author = 'config'
-    # print(message.content)
+    # print(content)
 
     # 解析字段
-    cfg_data = message.content.replace(' ', '').replace('：', ':').replace('\r', '')
+    cfg_data = content.replace(' ', '').replace('：', ':').replace('\r', '')
     for line in cfg_data.split('\n'):
         kv = line.strip().split(':')
         if len(kv) < 2:
@@ -75,7 +83,7 @@ async def call_function(func, arguments):
     functions = cl.user_session.get('functions')
     return functions.call_function(func, arguments)
 
-async def chat_main(message):
+async def chat_main(content):
     """
     对话聊天
     """
@@ -91,8 +99,8 @@ async def chat_main(message):
     message_history = cl.user_session.get('message_history')
 
     # 将用户的新消息加入历史
-    if message is not None:
-        message_history.append({'role': 'user', 'content': message.content})
+    if content is not None:
+        message_history.append({'role': 'user', 'content': content})
     # print('\n'.join([str(_) for _ in message_history]))
 
     # 工具
@@ -214,6 +222,9 @@ async def chat_main(message):
         await cl.Message(content=f'请求异常: {e}\n', author='error').send()
         recall = False
 
+    # 可以发送元素，比如图片
+    # await cl.Image(path='welcome.png', name='welcome').send()
+
     # print('\n'.join([str(_) for _ in message_history]))
     return recall
 
@@ -263,16 +274,16 @@ async def on_start():
     lock = asyncio.Lock()
     cl.user_session.set('lock', lock)
 
+    # 读取记忆
+    with open(memory_file, 'r', encoding='utf-8') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        memory_content = json.loads(f.read())
+        fcntl.flock(f, fcntl.LOCK_UN)
+
     # 预设一个 system 角色来定义 AI 的行为
     cl.user_session.set('message_history', [
-        {'role': 'system', 'content': '你的名字叫知了·AI，你是一个乐于助人的AI助手。'}
+        {'role': 'system', 'content': f'如下是你扮演的角色信息：\n {memory_content}'}
     ])
-
-    # 主动发送欢迎消息
-    await cl.Message(
-        content='👋 你好！我是 知了·AI。\n\n我可以帮你写代码、回答问题。',
-        author='system', # 可以自定义发送者名字
-    ).send()
 
     # 如果配置文件没有载入, 则告知需要配置
     if not cfg_check_and_set():
@@ -286,24 +297,26 @@ async def on_start():
                     '例如，你可以给我发送如下内容进行配置:\n'
                     '```\n'
                     'base_url: https://api.deepseek.com/v1\n'
-                    'api_key: xxxxxxx\n'
+                    'api_key: xxxxxxx(可置空)\n'
                     'model: DeepSeek-V3-2\n'
                     '```',
             author='config',
         ).send()
-
-    # 可以发送元素，比如图片
-    # await cl.Image(path='welcome.png', name='welcome').send()
+    else:
+        # 主动发送欢迎消息
+        recall = await chat_main('你是谁？请自我介绍，并欢迎我。')
+        while recall:
+            recall = await chat_main(None)
 
 @cl.on_message
 async def on_chat(message: cl.Message):
     if llm_cfg_value is None:
-        await cfg_main(message)
+        await cfg_main(message.content)
     else:
         lock = cl.user_session.get('lock')
         async with lock:  # 获取锁
             # 处理消息
-            recall = await chat_main(message)
+            recall = await chat_main(message.content)
             # 如果上一轮调用了工具, 那就还需要推理一次让模型输出结果
             while recall:
                 recall = await chat_main(None)
