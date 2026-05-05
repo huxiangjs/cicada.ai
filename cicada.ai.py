@@ -311,7 +311,10 @@ async def on_start():
         ).send()
     else:
         # 主动发送欢迎消息
-        recall = await chat_main('system消息: 请向user做自我介绍(不要机械性地展示记忆中的内容，介绍时不要表露出是user在问你问题)')
+        recall = await chat_main('system消息: 请向user做自我介绍;'
+                                 '介绍时不要机械性地展示记忆中的内容;'
+                                 '介绍时不要表露出是user在问你问题;'
+                                 '介绍时不能调用工具，其余时间可以调用工具;')
         while recall:
             recall = await chat_main(None)
 
