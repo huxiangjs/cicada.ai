@@ -206,7 +206,7 @@ async def chat_main(content):
                     result = await call_function(function_name, arguments)
                 except Exception as e:
                     print('异常的json数据:', arguments)
-                    result = 'tool出错了，请按相同参数重试'
+                    result = 'tool调用出错了，请检查参数是否正确'
                 # 把调用工具的结果加入上下文
                 new_message.append({"role": "tool", "tool_call_id": tool_call_id, "name": function_name, "content": result})
                 # print(message_history)

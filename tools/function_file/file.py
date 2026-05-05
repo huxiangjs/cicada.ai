@@ -170,7 +170,6 @@ class function_file:
         """调用入口"""
         op = arguments["op"]
         path = arguments["path"]
-        data = arguments["data"]
         if op == 'exists':
             return self.exists(path)
         elif op == 'listdir':
@@ -180,6 +179,7 @@ class function_file:
         elif op == 'rmdir':
             return self.rmdir(path)
         elif op == 'write':
+            data = arguments["data"]
             return self.write(path, data)
         elif op == 'read':
             return self.read(path)

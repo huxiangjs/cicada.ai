@@ -203,15 +203,15 @@ class function_alarm:
 
     def function_call(self, arguments):
         op = arguments['op']
-        type = arguments['add_type'] # 每次/一次
-        unit = arguments['add_unit'] # 秒/分钟/小时/天/周一/周二/周三/周四/周五/周六/周日
-        value = arguments['add_value']
-        note = arguments['add_note']
-        name = arguments['rm_name']
         # 操作
         if arguments['op'] == 'add':        # 添加一个闹钟
+            type = arguments['add_type'] # 每次/一次
+            unit = arguments['add_unit'] # 秒/分钟/小时/天/周一/周二/周三/周四/周五/周六/周日
+            value = arguments['add_value']
+            note = arguments['add_note']
             return self.add(type, unit, value, note)
         elif arguments['op'] == 'rm':       # 删除指定闹钟
+            name = arguments['rm_name']
             return self.rm(name)
         elif arguments['op'] == 'list':     # 列出当前存在的闹钟
             return self.list()

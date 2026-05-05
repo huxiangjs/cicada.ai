@@ -65,15 +65,16 @@ class function_memory:
     def function_call(self, arguments):
         try:
             op = arguments['op']
-            name = arguments['name']
-            value = arguments['value']
-            type = arguments['type']
             # 调用
             if op == 'all':
                 return self.all()
             elif op == 'remember':
+                name = arguments['name']
+                value = arguments['value']
+                type = arguments['type']
                 return self.remember(name, value, type)
             elif op == 'forget':
+                name = arguments['name']
                 return self.forget(name)
             else:
                 return f'非法的op: {op}'
