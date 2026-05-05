@@ -6,6 +6,10 @@ import fcntl
 memory_file = 'memory.json'
 
 class function_memory:
+    """
+    这是一个记忆工具，可以用于保存长期记忆
+    """
+
     def all(self):
         """
         读取所有的记忆
@@ -78,13 +82,14 @@ class function_memory:
 
     def __init__(self):
         desc = f"""
-        这是一个记忆工具，可以用于保存长期记忆，op包括有以下操作：
+        {function_memory.__doc__.strip()}
+        op包括有以下操作：
 
-        all: {function_memory.all.__doc__}
+        all: {function_memory.all.__doc__.strip()}
 
-        remember: {function_memory.remember.__doc__}
+        remember: {function_memory.remember.__doc__.strip()}
 
-        forget: {function_memory.forget.__doc__}
+        forget: {function_memory.forget.__doc__.strip()}
         """
 
         self.function_desc = {
