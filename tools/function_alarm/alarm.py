@@ -1,166 +1,297 @@
 # -*- coding:utf-8 -*-
 
 import threading
-import schedule # pip install schedule
+# pip install schedule
+import schedule as sd # schedule是模块级别的单一实例
 import time
+import json
+
+thread = None
+thread_name = 'alarm_schedule_thread'
+# 创建模块级单一调度线程
+for t in threading.enumerate():
+    if t.name == thread_name:
+        thread = t
+        print('闹钟调度线程已存在')
+
+if thread is None:
+    def run_sdr():
+        print("闹钟调度线程启动")
+        while True:
+            time.sleep(1)
+            thread.lock.acquire()
+            sd.run_pending()
+            thread.lock.release()
+        # print("闹钟调度线程退出")
+    print('创建闹钟调度线程')
+    t = threading.Thread(target=run_sdr, name=thread_name)
+    t.lock = threading.Lock() # 创建锁
+    t.start()
+    thread = t
 
 class function_alarm:
-    def __alarm_del(self, name):
-        job = self.__alarm_list[name][0]
-        schedule.cancel_job(job)
-        del self.__alarm_list[name]
-        print('删除闹钟:', name)
+    """
+    闹钟功能, 设定的闹钟到期后会使用system消息注入, 只有当system消息注入了才能提示user闹钟到期
+    """
+    def __is_my_job(self, job):
+        # 检查是不是自己的job
+        instance = job.job_func.args[4]
+        return self == instance
 
-    def __alarm_callback(self, name):
+    def __get_job(self, name):
+        alarm_job = None
+        # 查找job
+        for job in sd.get_jobs():
+            if job.job_func.args[0] == name and self.__is_my_job(job):
+                alarm_job = job
+                break
+        return alarm_job
+
+    def __get_desc_by_args(self, name, id, note):
+        """
+        返回值 json数据:
+            name: 闹钟名字
+            id: 闹钟的编号
+            note: 闹钟的备注
+        """
+        data_dict = {'name': name, 'id': id, 'note': note}
+        json_str = json.dumps(data_dict, indent=4, ensure_ascii=False)
+        return json_str
+
+    def __get_desc_by_job(self, job):
+        name = job.job_func.args[0]
+        id = job.job_func.args[1]
+        note = job.job_func.args[2]
+        return self.__get_desc_by_args(name, id, note)
+
+    def list(self):
+        """
+        列出当前所有有效的闹钟
+        返回值 json数据, list中每一项中的属性:
+            name: 闹钟名字
+            id: 闹钟的编号
+            note: 闹钟的备注
+        """
+        data_list = []
+        thread.lock.acquire()
+        for job in sd.get_jobs():
+            if not self.__is_my_job(job):
+                continue
+            name = job.job_func.args[0]
+            id = job.job_func.args[1]
+            note = job.job_func.args[2]
+            data_list.append({'name': name, 'id': id, 'note': note})
+        thread.lock.release()
+        json_str = json.dumps(data_list, indent=4, ensure_ascii=False)
+        return json_str
+
+    def __rm_by_job(self, job):
+        name = job.job_func.args[0]
+        print(f'删除闹钟：{name} | {self}')
+        sd.cancel_job(job)
+        return 'success'
+
+    def __rm_by_name(self, name):
+        alarm_job = self.__get_job(name)
+        if alarm_job is None:
+            return '出错: 要删除的闹钟不存在'
+        return self.__rm_by_job(alarm_job)
+
+    def rm(self, name):
+        """
+        删除已存在的闹钟
+        返回值: success表示成功，其它值则表示没有成功的原因
+        """
+        thread.lock.acquire()
+        retval = self.__rm_by_name(name)
+        thread.lock.release()
+        return retval
+
+    def __alarm_callback(self, name, id, note, once, instance):
+        """
+        这个函数是在锁里面调用的
+        """
         if self.__callback:
-             self.__callback(f"名为'{name}'、id为'{self.__alarm_list[name][2]}'的闹钟到期了, "
-                              "请仔细检查闹钟名字和id, 确保和设置的闹钟匹配, 之后根据需要提示user或者调用tool",
+             self.__callback(f"闹钟到期了：\n{self.__get_desc_by_args(name, id, note)}\n"
+                              "请仔细检查闹钟name和id, 确保和设置的闹钟匹配, 之后根据note提示user或者调用tool",
                               self.__args)
-        if  self.__alarm_list[name][1] == '一次':
-            self.__alarm_del(name)
+        # 如果只要响则关掉
+        if once:
+            print(f'删除一次性闹钟： {name}, 结果：', self.__rm_by_name(name))
 
-    def function_call(self, arguments):
+    def add(self, type, unit, value, note):
         """
-        设置闹钟
+        添加一个闹钟
+        返回值: 返回闹钟信息表示成功，其它值则表示没有成功的原因
         """
-        if arguments['op'] == 'add':        # 添加一个闹钟
-            type = arguments['type'] # 每次/一次
-            unit = arguments['unit'] # 秒/分钟/小时/天/周一/周二/周三/周四/周五/周六/周日
-            value = arguments['value']
+        if unit in '秒/分钟/小时':
+            alarm_name = f'{value}{unit}'
+        elif unit in '天/周一/周二/周三/周四/周五/周六/周日':
+            alarm_name = f'{unit}{value}'
+        else:
+            return '出错: 非法的unit参数取值'
+        if type == '每次':
+            alarm_name = f'每{alarm_name}响一次'
+            once = False
+        elif type == '一次':
             if unit in '秒/分钟/小时':
-                alarm_name = f'{value}{unit}'
-            elif unit in '天/周一/周二/周三/周四/周五/周六/周日':
-                alarm_name = f'{unit}{value}'
+                alarm_name = f'{alarm_name}后响一次'
+            elif unit == '天':
+                alarm_name = f'今{alarm_name}响一次'
+            else:
+                alarm_name = f'这{alarm_name}响一次'
+            once = True
+        else:
+            return '出错: 非法的type参数取值'
+        def __sd_do(f):
+            return f.do(self.__alarm_callback, alarm_name, self.__id, note, once, self)
+        # 设置
+        try:
+            if unit == '秒':
+                thread.lock.acquire()
+                job = __sd_do(sd.every(int(value)).seconds)
+                thread.lock.release()
+            elif unit == '分钟':
+                thread.lock.acquire()
+                job = __sd_do(sd.every(int(value)).minutes)
+                thread.lock.release()
+            elif unit == '小时':
+                thread.lock.acquire()
+                job = __sd_do(sd.every(int(value)).hour)
+                thread.lock.release()
+            elif unit == '天':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().day.at(value))
+                thread.lock.release()
+            elif unit == '周一':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().monday.at(value))
+                thread.lock.release()
+            elif unit == '周二':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().tuesday.at(value))
+                thread.lock.release()
+            elif unit == '周三':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().wednesday.at(value))
+                thread.lock.release()
+            elif unit == '周四':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().thursday.at(value))
+                thread.lock.release()
+            elif unit == '周五':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().friday.at(value))
+                thread.lock.release()
+            elif unit == '周六':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().saturday.at(value))
+                thread.lock.release()
+            elif unit == '周日':
+                thread.lock.acquire()
+                job = __sd_do(sd.every().sunday.at(value))
+                thread.lock.release()
             else:
                 return '出错: 非法的unit参数取值'
-            if type == '每次':
-                alarm_name = f'每{alarm_name}响一次'
-            elif type == '一次':
-                if unit in '秒/分钟/小时':
-                    alarm_name = f'{alarm_name}后响一次'
-                elif unit == '天':
-                    alarm_name = f'今{alarm_name}响一次'
-                else:
-                    alarm_name = f'这{alarm_name}响一次'
-            else:
-                return '出错: 非法的type参数取值'
-            # 设置
-            try:
-                if unit == '秒':
-                    job = schedule.every(int(value)).seconds.do(self.__alarm_callback, alarm_name)
-                elif unit == '分钟':
-                    job = schedule.every(int(value)).minutes.do(self.__alarm_callback, alarm_name)
-                elif unit == '小时':
-                    job = schedule.every(int(value)).hour.do(self.__alarm_callback, alarm_name)
-                elif unit == '天':
-                    job = schedule.every().day.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周一':
-                    job = schedule.every().monday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周二':
-                    job = schedule.every().tuesday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周三':
-                    job = schedule.every().wednesday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周四':
-                    job = schedule.every().thursday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周五':
-                    job = schedule.every().friday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周六':
-                    job = schedule.every().saturday.at(value).do(self.__alarm_callback, alarm_name)
-                elif unit == '周日':
-                    job = schedule.every().sunday.at(value).do(self.__alarm_callback, alarm_name)
-                else:
-                    return '出错: 非法的unit参数取值'
-            except Exception:
-                return '出错: 已提供的参数无法设置'
-            # 添加
-            print('添加闹钟:', alarm_name)
-            self.__alarm_list[alarm_name] = [job, type, self.__id]
-            retval = f'设置成功, 闹钟名字为: {alarm_name}、id为{self.__id}'
-            self.__id += 1
-            return retval
+        except Exception:
+            return '出错: 已提供的参数无法设置'
+        # 添加
+        print(f'添加闹钟: {alarm_name}, id:{self.__id}, 备注: {note} | {self}')
+        retval = f'添加成功，闹钟信息： \n{self.__get_desc_by_args(alarm_name, self.__id, note)}'
+        self.__id += 1
+        return retval
+
+    def function_call(self, arguments):
+        op = arguments['op']
+        type = arguments['add_type'] # 每次/一次
+        unit = arguments['add_unit'] # 秒/分钟/小时/天/周一/周二/周三/周四/周五/周六/周日
+        value = arguments['add_value']
+        note = arguments['add_note']
+        name = arguments['rm_name']
+        # 操作
+        if arguments['op'] == 'add':        # 添加一个闹钟
+            return self.add(type, unit, value, note)
         elif arguments['op'] == 'rm':       # 删除指定闹钟
-            alarm_name = arguments['name']
-            if alarm_name not in self.__alarm_list:
-                return '出错: 要删除的闹钟不存在'
-            self.__alarm_del(alarm_name)
-            return f'删除成功, 删除的闹钟名字为: {alarm_name}'
+            return self.rm(name)
         elif arguments['op'] == 'list':     # 列出当前存在的闹钟
-            retval = '当前正在运行的闹钟(名字列表):\n'
-            for alarm_name, _ in self.__alarm_list.items():
-                retval += f'{alarm_name}\n'
-            # print(f'当前闹钟: \n{retval}')
-            return retval
+            return self.list()
 
     def function_init(self, callback, args):
         self.__callback = callback
         self.__args = args
         self.__id = 0
-        def run_scheduler(stop_event):
-            print("闹钟调度线程启动")
-            while not stop_event.is_set():
-                schedule.run_pending()
-                time.sleep(1)
-            print("闹钟调度线程退出")
-        self.__thread = threading.Thread(target=run_scheduler, args=(self.__stop_event,))
-        self.__thread.start()
 
     def function_deinit(self):
-        # 设置停止信号
-        self.__stop_event.set()
-        self.__thread.join()
         # 删掉所有
-        for _, job in self.__alarm_list.items():
-            schedule.cancel_job(job)
-        self.__alarm_list.clear()
+        thread.lock.acquire()
+        for job in sd.get_jobs():
+            if not self.__is_my_job(job):
+                continue
+            self.__rm_by_job(job)
+        thread.lock.release()
         self.__callback = None
         self.__args = None
 
     def __init__(self):
-        self.__alarm_list = { }
         self.__callback = None
         self.__args = None
         self.__id = 0
-        self.__stop_event = threading.Event()
+
+        desc = f"""
+        {function_alarm.__doc__.strip()}
+        op包括有以下操作：
+
+        add: {function_alarm.add.__doc__.strip()}
+
+        rm: {function_alarm.rm.__doc__.strip()}
+
+        list: {function_alarm.list.__doc__.strip()}
+        """
+
         self.function_desc = {
             "desc": {
                 "type": "function",  # 工具类型，目前主要是 "function"
                 "function": {
                     "name": "alarm_clock",  # 函数名
-                    "description": "闹钟功能, 设定的闹钟到期后会使用system消息注入, 只有单system消息注入了才能提示user闹钟到期",  # 功能描述
+                    "description": desc,    # 功能描述
                     "parameters": {  # 参数定义，遵循 JSON Schema
                         "type": "object",
                         "properties": {
                             "op": {
                                 "type": "string",
-                                "description": "操作类型, add:添加一个闹钟; rm:删除一个闹钟; list:列出当前正在运行的闹钟",
+                                "description": "操作类型",
                                 "enum": ["add", "rm", "list"]
                             },
-                            "type": {
+                            "add_type": {
                                 "type": "string",
                                 "description": "闹钟类型, 是响一次还是每次都响; 响一次的闹钟在到期后会自动删除;"
-                                            "op为list和rm时, 这个参数应该设置为空",
-                                "enum": ["每次", "一次", ""]
+                                               "仅当op为add时需要这个参数, 其它的op时都应该置空",
+                                "enum": ["每次", "一次"]
                             },
-                            "unit": {
+                            "add_unit": {
                                 "type": "string",
-                                "description": "时间单位;"
-                                            "op为list和rm时, 这个参数应该设置为空",
-                                "enum": ["秒", "分钟", "小时", "天", "周一", "周二", "周三", "周四", "周五", "周六", "周日", ""]
+                                "description": "时间单位; 仅当op为add时需要这个参数, 其它的op时都应该置空",
+                                "enum": ["秒", "分钟", "小时", "天", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
                             },
-                            "value": {
+                            "add_value": {
                                 "type": "string",
                                 "description": "时间值;"
-                                            "unit为 秒/分钟/小时 时, 这个值应该是个整数;"
-                                            "除此之外这个值应该是个时间, 例如 12:30:01;"
-                                            "op为list和rm时, 这个参数应该设置为空",
+                                               "unit为 秒/分钟/小时 时, 这个值应该是个整数;"
+                                               "除此之外这个值应该是个时间, 例如 12:30:01;"
+                                               "仅当op为add时需要这个参数, 其它的op时都应该置空",
                             },
-                            "name": {
+                            "add_note": {
                                 "type": "string",
-                                "description": "闹钟名字;"
-                                            "仅当op为rm时需要这个参数, 其它的op取值都应该设置为空",
+                                "description": "闹钟备注，记录闹钟到期后要作的事情;"
+                                               "仅当op为add时需要这个参数, 其它的op时都应该置空",
+                            },
+                            "rm_name": {
+                                "type": "string",
+                                "description": "需要删除的闹钟名字;"
+                                               "仅当op为rm时需要这个参数, 其它的op时都应该置空",
                             },
                         },
-                        "required": ["op"]  # 指定必填参数
+                        "required": ["op", "add_type", "add_unit", "add_value", "add_note", "rm_name"]  # 指定必填参数
                     }
                 }
             },
@@ -171,22 +302,24 @@ class function_alarm:
 
 def __test(f):
     # 添加闹钟
-    f.function_call({'op': 'add', 'type': '每次', 'unit': '天', 'value': '12:30:00', 'name': ''})
-    f.function_call({'op': 'add', 'type': '每次', 'unit': '秒', 'value': '10', 'name': ''})
-    f.function_call({'op': 'add', 'type': '每次', 'unit': '周四', 'value': '12:30:00', 'name': ''})
-    f.function_call({'op': 'add', 'type': '一次', 'unit': '天', 'value': '12:30:00', 'name': ''})
-    f.function_call({'op': 'add', 'type': '一次', 'unit': '周五', 'value': '12:30:00', 'name': ''})
+    f.function_call({'op': 'add', 'add_type': '每次', 'add_unit': '天', 'add_value': '12:30:00', 'add_note': 'test', 'rm_name': ''})
+    f.function_call({'op': 'add', 'add_type': '每次', 'add_unit': '秒', 'add_value': '10', 'add_note': 'test', 'rm_name': ''})
+    f.function_call({'op': 'add', 'add_type': '一次', 'add_unit': '秒', 'add_value': '15', 'add_note': 'test', 'rm_name': ''})
+    f.function_call({'op': 'add', 'add_type': '每次', 'add_unit': '周四', 'add_value': '12:30:00', 'add_note': 'test', 'rm_name': ''})
+    f.function_call({'op': 'add', 'add_type': '一次', 'add_unit': '天', 'add_value': '12:30:00', 'add_note': 'test', 'rm_name': ''})
+    f.function_call({'op': 'add', 'add_type': '一次', 'add_unit': '周五', 'add_value': '12:30:00', 'add_note': 'test', 'rm_name': ''})
     # 列出闹钟
-    f.function_call({'op': 'list', 'type': '', 'unit': '', 'value': '', 'name': ''})
+    f.function_call({'op': 'list', 'add_type': '', 'add_unit': '', 'add_value': '', 'add_note': '', 'rm_name': ''})
     # 删除闹钟
-    f.function_call({'op': 'rm', 'type': '', 'unit': '', 'value': '', 'name': '每天12:30:00响一次'})
+    f.function_call({'op': 'rm', 'add_type': '', 'add_unit': '', 'add_value': '', 'add_note': '', 'rm_name': '每天12:30:00响一次'})
     # 列出闹钟
-    f.function_call({'op': 'list', 'type': '', 'unit': '', 'value': '', 'name': ''})
+    f.function_call({'op': 'list', 'add_type': '', 'add_unit': '', 'add_value': '', 'add_note': '', 'rm_name': ''})
 
 if __name__ == "__main__":
     f = function_alarm()
     f.function_init(lambda x,_: print(x), None)
     __test(f)
-    time.sleep(22)
+    print(json.dumps(f.function_desc["desc"], indent=4, ensure_ascii=False))
+    time.sleep(60)
     f.function_deinit()
     time.sleep(1)
