@@ -1,7 +1,7 @@
 # -*- coding:utf-8 -*-
 
 import json
-import fcntl
+import portalocker
 
 memory_file = 'memory.json'
 
@@ -17,7 +17,7 @@ class function_memory:
                value: 这个是记忆内容，是你回答问题时需要关注的
                type: 这个是记忆的属性，进行记忆操作时需要关注，取值有 可修改/不可修改/可删除/不可删除
         """
-        with open(memory_file, 'r', encoding='utf-8') as f:
+        with portalocker.Lock(memory_file, 'r', encoding='utf-8') as f:
             return f.read()
 
     def remember(self, name, value, type):
@@ -25,8 +25,7 @@ class function_memory:
         添加记忆或者修正已有的记忆
         返回值: success表示成功，其它值则表示没有成功的原因
         """
-        with open(memory_file, 'r+', encoding='utf-8') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
+        with portalocker.Lock(memory_file, 'r+', encoding='utf-8') as f:
             # 先读出来
             memory = json.loads(f.read())
             # 检测属性
@@ -37,7 +36,6 @@ class function_memory:
             f.truncate()     # 清空所有内容
             # 重新写入
             f.write(json.dumps(memory, indent=4, ensure_ascii=False))
-            fcntl.flock(f, fcntl.LOCK_UN)
         return 'success'
 
     def forget(self, name):
@@ -45,8 +43,7 @@ class function_memory:
         遗忘指定的记忆
         返回值: success表示成功，其它值则表示没有成功的原因
         """
-        with open(memory_file, 'r+', encoding='utf-8') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
+        with portalocker.Lock(memory_file, 'r+', encoding='utf-8') as f:
             # 先读出来
             memory = json.loads(f.read())
             # 检测属性
@@ -59,7 +56,6 @@ class function_memory:
             f.truncate()     # 清空所有内容
             # 重新写入
             f.write(json.dumps(memory, indent=4, ensure_ascii=False))
-            fcntl.flock(f, fcntl.LOCK_UN)
         return 'success'
 
     def function_call(self, arguments):

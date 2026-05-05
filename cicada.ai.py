@@ -2,7 +2,7 @@
 
 import os
 import shutil
-import fcntl
+import portalocker
 import chainlit as cl
 from openai import AsyncOpenAI,BadRequestError
 import json
@@ -278,10 +278,8 @@ async def on_start():
     cl.user_session.set('lock', lock)
 
     # 读取记忆
-    with open(memory_file, 'r', encoding='utf-8') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+    with portalocker.Lock(memory_file, 'r', encoding='utf-8') as f:
         memory_content = json.loads(f.read())
-        fcntl.flock(f, fcntl.LOCK_UN)
 
     # 预设一个 system 角色来定义 AI 的行为
     cl.user_session.set('message_history', [
