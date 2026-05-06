@@ -18,6 +18,22 @@ memory_file = 'memory.json'
 if not os.path.exists(memory_file):
     shutil.copy('memory_default.json', memory_file)
 
+# 判断是否要启用账户验证
+if os.getenv("CHAINLIT_AUTH_SECRET"):
+    @cl.password_auth_callback
+    def auth_callback(username: str, password: str):
+        # 从环境变量获取用户名和密码，如果没有设置则默认为 None
+        ENV_USERNAME = os.getenv("APP_USERNAME")
+        ENV_PASSWORD = os.getenv("APP_PASSWORD")
+        # 校验输入的用户名密码是否与环境变量中的一致
+        if username == ENV_USERNAME and password == ENV_PASSWORD:
+            return cl.User(
+                identifier=username,
+                metadata={"role": "admin", "provider": "credentials"}
+            )
+        else:
+            return None
+
 def item_check(json_data):
     """
     配置项检查
