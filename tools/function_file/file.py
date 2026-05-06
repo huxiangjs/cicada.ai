@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 import json
+from markitdown import MarkItDown # pip install 'markitdown[all]'
 
 # 工作目录
 workspace_dir = 'workspace'
@@ -16,10 +17,10 @@ class RestrictedPath:
     def __init__(self, root_path):
         self.root_path = Path(root_path).resolve()
 
-    def __check_path(self, user_path):
+    def check_path(self, user_path):
         """检查路径是否在根目录下"""
-        if user_path == '/':
-            user_path = '.'
+        if user_path.startswith('/'):
+            user_path = '.' + user_path
         full_path = (self.root_path / user_path).resolve()
         # 确保路径在根目录内
         if not str(full_path).startswith(str(self.root_path)):
@@ -28,23 +29,23 @@ class RestrictedPath:
 
     def open(self, path, mode='r', encoding='utf-8'):
         """打开文件"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         return open(full_path, mode, encoding=encoding)
 
     def rm(self, path):
         """删除文件"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         os.remove(full_path)
         return not full_path.exists()
 
     def exists(self, path):
         """检查给出的路径是否存在，路径可以是目录或者文件"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         return full_path.exists()
 
     def listdir(self, path='.'):
         """递归列出指定目录下所有的文件和文件夹"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         result_list = [ ]
         for root, dirs, files in os.walk(full_path):
             # 去掉workspace往前的路径
@@ -60,18 +61,30 @@ class RestrictedPath:
 
     def mkdir(self, path):
         """创建目录，父目录如果不存在则会自动创建"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         os.makedirs(full_path, exist_ok=True)
         return full_path.exists()
 
     def rmdir(self, path):
         """递归删除目录及其所有内容"""
-        full_path = self.__check_path(path)
+        full_path = self.check_path(path)
         shutil.rmtree(full_path)
         return not full_path.exists()
 
 class function_file:
-    """提供存储功能，可以进行文件和目录的操作"""
+    """
+    提供存储功能，可以进行文件和目录的操作。
+    可以读取的文件格式：
+        (1) 办公与文档类: .pdf/.doc/.docx/.ppt/.pptx/.xlsx/.xls
+        (2) 网页类: .html
+        (3) 所有的纯文本数据源码类: 包括 .xml/.json/.csv/.txt/.py/.c/.cpp/.java 等等
+    写入文件文件格式无限制，例如 .md/.txt/.csv 等纯文本格式文件；
+    """
+    def __convert_required(self, path):
+        format_list = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xlsx', '.xls', '.html']
+        _, ext = os.path.splitext(path)
+        return ext.lower() in format_list
+
     def exists(self, path):
         """
         检查给出的路径是否存在，路径可以是目录或者文件
@@ -146,9 +159,16 @@ class function_file:
         """
         result_dict = {"msg": "success", "data": ""}
         try:
-            with self.__restricted.open(path, 'r', encoding='utf-8') as f:
-                file_data = f.read()
-                result_dict["data"] = file_data
+            if self.__convert_required(path):
+                full_path = self.__restricted.check_path(path)
+                # 转换文件
+                md = MarkItDown()
+                result = md.convert(full_path)
+                result_dict["data"] = result.text_content
+            else:
+                with self.__restricted.open(path, 'r', encoding='utf-8') as f:
+                    file_data = f.read()
+                    result_dict["data"] = file_data
         except Exception as e:
             result_dict["msg"] = str(e)
         result_json_str = json.dumps(result_dict, indent=4, ensure_ascii=False)
